@@ -13,6 +13,7 @@ Currently:
  * Strip out unused references
  * Spec splitting
  * Add caniuse.com annotations
+ * Add MDN annotations
  * Add syntax-highlighting markup to `<pre>` contents
 
 ## Wattsi Syntax

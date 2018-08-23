@@ -59,6 +59,8 @@ type
 
 var
    HighlighterOutputByJSONContents: TStringMap;
+   MDNJSONData: TJSON;
+   CurrentVariant: TAllVariants;
 
 const
    kSuffixes: array[TVariants] of UTF8String = ('html', 'dev', 'snap', 'review');
@@ -141,6 +143,19 @@ begin
          or AnsiContainsStr(ClassValue, 'js')
          or AnsiContainsStr(ClassValue, 'html')
          or AnsiContainsStr(ClassValue, 'abnf')));
+end;
+
+function HasAncestor(Element: TNode; const TestNamespaceURL, TestLocalName: TCanonicalString): Boolean;
+begin
+   repeat
+      Element := Element.ParentNode;
+      if (not (Element is TElement)) then
+      begin
+         Result := False;
+         exit;
+      end;
+   until (TElement(Element).IsIdentity(TestNamespaceURL, TestLocalName));
+   Result := True;
 end;
 
 procedure ProcessDocument(const Document: TDocument; const Variant: TVariants; out BigTOC: TElement; const SourceGitSHA: AnsiString);
@@ -1154,19 +1169,6 @@ var
       until Done;
    end;
 
-   function HasAncestor(Element: TNode; const TestNamespaceURL, TestLocalName: TCanonicalString): Boolean;
-   begin
-      repeat
-         Element := Element.ParentNode;
-         if (not (Element is TElement)) then
-         begin
-            Result := False;
-            exit;
-         end;
-      until (TElement(Element).IsIdentity(TestNamespaceURL, TestLocalName));
-      Result := True;
-   end;
-
    procedure InsertAnnotations();
    var
       ID: UTF8String;
@@ -1754,6 +1756,84 @@ Result := False;
          Result := False;
    end;
 
+   procedure InsertMDNAnnotationForElement(const Element: TElement);
+   var
+      ID, MDNPath, MDNSubPath: UTF8String;
+      MDNBox, IDLCommentStart, IDLCommentEnd: TElement;
+   const
+      kMDNURLBase = 'https://developer.mozilla.org/en-US/docs/Web/';
+   begin
+      if ((CurrentVariant = vHTML) and InSplit) then
+         // MDN annotations have already been inserted in this case.
+         exit;
+      if (not(Element.HasAttribute('id'))) then
+         exit;
+      ID := Element.GetAttribute('id').AsString;
+      if (not(MDNJSONData[ID] is TJSONArray)) then
+         // No MDN article has a link to this ID.
+         exit;
+      MDNBox := E(eSpan, ['class', 'mdn']);
+      if (HasAncestor(Element, nsHTML, ePre)
+         or Element.HasProperties(propHeading)) then
+      begin
+         // For annotations to items inside <pre> elements or headings, insert
+         // the annotation box right after the element being annotated. (We do
+         // this in order to get it aligned right.
+         if ((Element.NextSibling is TElement)
+               and ((Element.NextSibling as TElement)
+                  .GetAttribute('class').AsString = 'mdn')) then
+            // If there's already an MDN box at the point where we want this,
+            // then just re-use it (instead of creating another one).
+            MDNBox := Element.NextSibling as TElement
+         else
+            (Element.ParentNode as TElement)
+               .InsertBefore(MDNBox, Element.NextSibling);
+      end
+      else
+      begin
+         if (((Element.ParentNode as TElement).LastChild is TElement)
+               and (((Element.ParentNode as TElement).LastChild as TElement)
+                  .GetAttribute('class').AsString = 'mdn')) then
+            // If there's already an MDN box at the point where we want this,
+            // then just re-use it (instead of creating another one).
+            MDNBox := (Element.ParentNode as TElement).LastChild as TElement
+         else
+            if (Element.IsIdentity(nsHTML, eA)
+                  or Element.IsIdentity(nsHTML, eCode)
+                  or Element.IsIdentity(nsHTML, eSpan)
+                  or Element.IsIdentity(nsHTML, eDfn)) then
+               (Element.ParentNode as TElement).AppendChild(MDNBox)
+            else
+               Element.AppendChild(MDNBox);
+      end;
+      for MDNPath in TJSONArray(MDNJSONData[ID]) do
+      begin
+         MDNSubPath := Copy(MDNPath, Pos('/', MDNPath) + 1);
+         if (HasAncestor(Element, nsHTML, ePre)) then
+         begin
+            // Wrap the annotation in WebIDL comment delimiters to keep the
+            // highligher's WebIDL parser from failing with a syntax error.
+            IDLCommentStart := E(eI, ['hidden', ''], Document, [T('/*')]);
+            IDLCommentEnd := E(eI, ['hidden', ''], Document, [T('*/')]);
+            MDNBox.AppendChild(E(eSpan, [
+               IDLCommentStart,
+               E(eB, ['onclick', 'toggleStatus(this)'],
+               Document, [T('MDN')]), T(' '),
+               E(eA, ['href', kMDNURLBase + MDNPath],
+               Document, [T(MDNSubPath, Document)]),
+               IDLCommentEnd]))
+         end
+         else
+         begin
+            MDNBox.AppendChild(E(eSpan, [
+               E(eB, ['onclick', 'toggleStatus(this)'],
+               Document, [T('MDN')]), T(' '),
+               E(eA, ['href', kMDNURLBase + MDNPath],
+               Document, [T(MDNSubPath, Document)])]))
+         end;
+      end;
+   end;
+
    function SkippableTBodyStartTag(const Element: TElement): Boolean;
    begin
 Result := False;
@@ -1855,6 +1935,7 @@ Result := False;
       AttributeName, EscapedAttributeName, EscapedAttributeValue: UTF8String;
       Quotes: TQuoteType;
       Variant: TAllVariants;
+      Style: TElement;
    begin
       // The following causes the <pre> start tag for any empty pre elements to
       // be dropped. We can end up with empty pre elements because the first
@@ -1862,6 +1943,39 @@ Result := False;
       // behind the (now-empty) pre parents of the <code class="idl"> elements.
       if Element.IsIdentity(nsHTML, ePre) and (Element.TextContent.AsString = '') then
          exit;
+      // TODO: Move the styles below to https://resources.whatwg.org/spec.css or
+      // https://resources.whatwg.org/standard.css and remove the following
+      // before merging this patch.
+      if (Element.IsIdentity(nsHTML, eHead)) then
+      begin
+         Style := E(eStyle,
+            [T('.mdn { display: block; min-height: 0.6em; font: 12px sans-serif;'
+               + ' padding: 0.3em; position: absolute; z-index: 9; right: 0.3em;'
+               + ' background: #FFF; color: black; margin: -22px 0 0 0;'
+               + ' border-collapse: initial; border-spacing: initial; }'
+               + ' .mdn b { cursor: pointer; padding: 2px 3px 0px 3px;'
+               + ' background-color: #000; color: #fff; font-weight: normal; '
+               + ' font-family: zillaslab,Palatino,"Palatino Linotype",serif; }'
+               + ' pre .mdn { margin: -22px 0 0 0; }'
+               + ' h2 + .mdn { margin: -42px 0 0 0; }'
+               + ' h3 + .mdn { margin: -40px 0 0 0; }'
+               + ' h4 + .mdn { margin: -36px 0 0 0; }'
+               + ' h5 + .mdn { margin: -34px 0 0 0; }'
+               + ' h6 + .mdn { margin: -34px 0 0 0; }'
+               + ' .mdn span { display: block }'
+               + ' .mdn :link { color: #0000EE; }'
+               + ' .mdn :visited { color: #551A8B; }'
+               + ' .mdn :link:active, :visited:active { color: #FF0000; }'
+               + ' .mdn :link, :visited { text-decoration: underline; cursor: pointer; }'
+               + ' .mdn .wrapped a { display: none; }'
+               + ' .mdn:hover { z-index: 11; }'
+               + ' .mdn:focus-within { z-index: 11; }'
+               + ' .status:hover { z-index: 11; }'
+               + ' .status:focus-within { z-index: 11; }'
+               )]);
+         Element.AppendChild(Style);
+      end;
+      InsertMDNAnnotationForElement(Element);
       IsExcluder := DetermineIsExcluder(Element, AttributeCount);
       if ((not IsExcluder) and ((AttributeCount > 0) or (not (Element.HasProperties(propOptionalStartTag) or SkippableTBodyStartTag(Element))))) then
       begin
@@ -2573,18 +2687,18 @@ begin
       Quiet := true;
       ParamOffset := 1;
    end;
-   if (ParamCount() <> 5) then
-      if (ParamCount() = 6) then
+   if (ParamCount() <> 6) then
+      if (ParamCount() = 7) then
       begin
          if (not Quiet) then
          begin
-            HighlightServerURL := ParamStr(6);
+            HighlightServerURL := ParamStr(7);
          end
       end
       else
-      if ((ParamCount() = 7) and Quiet) then
+      if ((ParamCount() = 8) and Quiet) then
       begin
-         HighlightServerURL := ParamStr(7);
+         HighlightServerURL := ParamStr(8);
       end
       else
       if ((ParamCount() = 1) and (ParamStr(1) = '--version')) then
@@ -2596,7 +2710,7 @@ begin
       begin
          Writeln('wattsi: invalid arguments');
          Writeln('syntax:');
-         Writeln('  wattsi [--quiet] <source-file> <source-git-sha> <output-directory> <default-or-review> <caniuse.json> [<highlight-server-url>]');
+         Writeln('  wattsi [--quiet] <source-file> <source-git-sha> <output-directory> <default-or-review> <caniuse.json> <id-map.json> [<highlight-server-url>]');
          Writeln('  wattsi --version');
          exit;
       end;
@@ -2613,6 +2727,8 @@ begin
    end;
    Features := TFeatureMap.Create(@UTF8StringHash32);
    try
+      Inform('Parsing MDN data...');
+      MDNJSONData := ParseJSON(ReadTextFile(ParamStr(6 + ParamOffset)));
       PreProcessCanIUseData(ParamStr(5 + ParamOffset));
       {$IFDEF VERBOSE_PREPROCESSORS}
          if (Assigned(Features)) then
@@ -2670,6 +2786,7 @@ begin
                begin
                   for Variant in TVariants do
                   begin
+                     CurrentVariant := Variant;
                      if (Variant = vReview) then
                      begin
                         continue;
