@@ -1759,7 +1759,7 @@ Result := False;
    procedure InsertMDNAnnotationForElement(const Element: TElement);
    var
       ID, MDNPath, MDNSubPath: UTF8String;
-      MDNBox, IDLCommentStart, IDLCommentEnd: TElement;
+      MDNBox, MDNButton, IDLCommentStart, IDLCommentEnd: TElement;
    const
       kMDNURLBase = 'https://developer.mozilla.org/en-US/docs/Web/';
    begin
@@ -1773,6 +1773,9 @@ Result := False;
          // No MDN article has a link to this ID.
          exit;
       MDNBox := E(eSpan, ['class', 'mdn']);
+      MDNButton := E(eInput, ['onclick', 'toggleStatus(this)',
+                     'value', '⋰', 'type', 'button']);
+      MDNBox.AppendChild(MDNButton);
       if (HasAncestor(Element, nsHTML, ePre)
          or Element.HasProperties(propHeading)) then
       begin
@@ -1817,8 +1820,7 @@ Result := False;
             IDLCommentEnd := E(eI, ['hidden', ''], Document, [T('*/')]);
             MDNBox.AppendChild(E(eSpan, [
                IDLCommentStart,
-               E(eB, ['onclick', 'toggleStatus(this)'],
-               Document, [T('MDN')]), T(' '),
+               E(eB, [T('MDN')]), T(' '),
                E(eA, ['href', kMDNURLBase + MDNPath],
                Document, [T(MDNSubPath, Document)]),
                IDLCommentEnd]))
@@ -1826,8 +1828,7 @@ Result := False;
          else
          begin
             MDNBox.AppendChild(E(eSpan, [
-               E(eB, ['onclick', 'toggleStatus(this)'],
-               Document, [T('MDN')]), T(' '),
+               E(eB, [T('MDN')]), T(' '),
                E(eA, ['href', kMDNURLBase + MDNPath],
                Document, [T(MDNSubPath, Document)])]))
          end;
@@ -1949,29 +1950,61 @@ Result := False;
       if (Element.IsIdentity(nsHTML, eHead)) then
       begin
          Style := E(eStyle,
-            [T('.mdn { display: block; min-height: 0.6em; font: 12px sans-serif;'
-               + ' padding: 0.3em; position: absolute; z-index: 9; right: 0.3em;'
-               + ' background: #FFF; color: black; margin: -22px 0 0 0;'
-               + ' border-collapse: initial; border-spacing: initial; }'
-               + ' .mdn b { cursor: pointer; padding: 2px 3px 0px 3px;'
-               + ' background-color: #000; color: #fff; font-weight: normal; '
-               + ' font-family: zillaslab,Palatino,"Palatino Linotype",serif; }'
-               + ' pre .mdn { margin: -22px 0 0 0; }'
-               + ' h2 + .mdn { margin: -42px 0 0 0; }'
-               + ' h3 + .mdn { margin: -40px 0 0 0; }'
-               + ' h4 + .mdn { margin: -36px 0 0 0; }'
-               + ' h5 + .mdn { margin: -34px 0 0 0; }'
-               + ' h6 + .mdn { margin: -34px 0 0 0; }'
+            [T('.mdn {'
+               + '  display: block;'
+               + '  font: 12px sans-serif;'
+               + '  position: absolute; '
+               + '  z-index: 9;'
+               + '  right: 0.3em;'
+               + '  background-color: #eee;'
+               + '  margin: -28px 0 0 0;'
+               + '  padding: 7px 5px 5px 6px;'
+               + '  min-width: 140px;'
+               + '  box-shadow: 0 0 3px #999;'
+               + '}'
+               + ' .mdn input {'
+               + '   cursor: pointer;'
+               + '   position: absolute;'
+               + '   left: 0;'
+               + '   top: -2px;'
+               + '   height: 1em;'
+               + '   border: none;'
+               + '   color: #000;'
+               + '   background: transparent;'
+               + '   margin-left: -8px;'
+               + '   font-size: 10px;'
+               + '   line-height: 1em;'
+               + '}'
+               + ' .mdn b {'
+               + '  color: #fff;'
+               + '  background-color: #000;'
+               + '  font-weight: normal; '
+               + '  font-family: zillaslab,Palatino,"Palatino Linotype",serif;'
+               + '  padding: 2px 3px 0px 3px;'
+               + '  line-height: 1.3em;'
+               + '}'
+               + ' .mdn span:nth-child(n+3) > b {'
+               + '  color: #eee;'
+               + '  background-color: #eee;'
+               + '}'
+               + ' pre .mdn { margin: -26px 0 0 0; }'
+               + ' h2 + .mdn { margin: -48px 0 0 0; }'
+               + ' h3 + .mdn { margin: -46px 0 0 0; }'
+               + ' h4 + .mdn { margin: -42px 0 0 0; }'
+               + ' h5 + .mdn { margin: -40px 0 0 0; }'
+               + ' h6 + .mdn { margin: -40px 0 0 0; }'
                + ' .mdn span { display: block }'
                + ' .mdn :link { color: #0000EE; }'
                + ' .mdn :visited { color: #551A8B; }'
                + ' .mdn :link:active, :visited:active { color: #FF0000; }'
-               + ' .mdn :link, :visited { text-decoration: underline; cursor: pointer; }'
-               + ' .mdn .wrapped a { display: none; }'
+               + ' .mdn :link, :visited {'
+               + '   text-decoration: underline;'
+               + '   cursor: pointer;'
+               + '}'
+               + ' .mdn.wrapped { min-width: 0px; }'
+               + ' .mdn.wrapped a { display: none; }'
                + ' .mdn:hover { z-index: 11; }'
                + ' .mdn:focus-within { z-index: 11; }'
-               + ' .status:hover { z-index: 11; }'
-               + ' .status:focus-within { z-index: 11; }'
                )]);
          Element.AppendChild(Style);
       end;
