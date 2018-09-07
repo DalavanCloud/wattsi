@@ -1758,7 +1758,8 @@ Result := False;
 
    procedure InsertMDNAnnotationForElement(const Element: TElement);
    var
-      ID, MDNPath, MDNSubPath: UTF8String;
+      MDNDetails: TJSONArray;
+      ID, MDNPath, MDNTitle, MDNSummary: UTF8String;
       MDNBox, MDNButton, IDLCommentStart, IDLCommentEnd: TElement;
    const
       kMDNURLBase = 'https://developer.mozilla.org/en-US/docs/Web/';
@@ -1809,9 +1810,30 @@ Result := False;
             else
                Element.AppendChild(MDNBox);
       end;
-      for MDNPath in TJSONArray(MDNJSONData[ID]) do
+      for MDNDetails in TJSONArray(MDNJSONData[ID]) do
       begin
-         MDNSubPath := Copy(MDNPath, Pos('/', MDNPath) + 1);
+         // MDNJSONData[ID] is an array of arrays, where each array is data
+         // associated with a particular MDN article which links to the given ID
+         // in the HTML spec. We loop through those arrays and assign each to an
+         // MDNDetails, which contains data for a particular MDN article: the
+         // MDN article path, MDN article title, and MDN article summary.
+         //
+         // Example showing the structure of the JSON data:
+         // "workers": [                    <= HTML spec ID
+         //   [
+         //     "API/Web_Workers_API",      <= MDN article path
+         //     "Web Workers API",          <= MDN article title
+         //     "Web Workers makes it ..."  <= MDN article summary
+         //   ],
+         //   [
+         //     "API/Web_Workers_API/Using_web_workers",
+         //     "Using Web Workers",
+         //     "Web Workers is a simple means for web content to ..."
+         //   ]
+         // ]
+         MDNPath := MDNDetails[0];
+         MDNTitle := MDNDetails[1];
+         MDNSummary := MDNDetails[2];
          if (HasAncestor(Element, nsHTML, ePre)) then
          begin
             // Wrap the annotation in WebIDL comment delimiters to keep the
@@ -1821,16 +1843,16 @@ Result := False;
             MDNBox.AppendChild(E(eSpan, [
                IDLCommentStart,
                E(eB, [T('MDN')]), T(' '),
-               E(eA, ['href', kMDNURLBase + MDNPath],
-               Document, [T(MDNSubPath, Document)]),
+               E(eA, ['href', kMDNURLBase + MDNPath, 'title', MDNSummary],
+               Document, [T(MDNTitle, Document)]),
                IDLCommentEnd]))
          end
          else
          begin
             MDNBox.AppendChild(E(eSpan, [
                E(eB, [T('MDN')]), T(' '),
-               E(eA, ['href', kMDNURLBase + MDNPath],
-               Document, [T(MDNSubPath, Document)])]))
+               E(eA, ['href', kMDNURLBase + MDNPath, 'title', MDNSummary],
+               Document, [T(MDNTitle, Document)])]))
          end;
       end;
    end;
