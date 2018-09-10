@@ -635,6 +635,114 @@ var
       end;
    end;
 
+   procedure InsertMDNAnnotationForElement(const Element: TElement);
+   var
+      MDNDetails: TJSONArray;
+      Candidate: TNode;
+      ID, MDNPath, MDNTitle, MDNSummary: UTF8String;
+      PreElement, MDNPreBox, MDNBox, MDNButton: TElement;
+   const
+      kMDNURLBase = 'https://developer.mozilla.org/en-US/docs/Web/';
+   begin
+      if (HasAncestor(Element, nsHTML, eP)) then
+         // Annotations for elements with p ancestors are handled later.
+         exit;
+      if (not(Element.HasAttribute('id'))) then
+         exit;
+      ID := Element.GetAttribute('id').AsString;
+      if (not(MDNJSONData[ID] is TJSONArray)) then
+         // No MDN article has a link to this ID.
+         exit;
+      MDNBox := E(eAside, ['class', 'mdn']);
+      MDNPreBox := E(eAside, ['class', 'mdn before_pre']);
+      MDNButton := E(eInput, ['onclick', 'toggleStatus(this)',
+                     'value', '⋰', 'type', 'button']);
+      Candidate := Element;
+      if (HasAncestor(Element, nsHTML, ePre)) then
+      begin
+         // For annotations to items inside pre elements, insert the annotation
+         // box right before the pre element.
+         repeat
+            Candidate := Candidate.ParentNode;
+            if (not (Candidate is TElement)) then
+               exit;
+         until (TElement(Candidate).IsIdentity(nsHTML, ePre));
+         PreElement := TElement(Candidate);
+         if ((PreElement.PreviousSibling is TElement)
+               and (TElement(PreElement.PreviousSibling)
+                  .GetAttribute('class').AsString = 'mdn before_pre')) then
+            // If there's already an MDN box at the point where we want this,
+            // then just re-use it (instead of creating another one).
+            MDNPreBox := TElement(PreElement.PreviousSibling)
+         else
+            TElement(PreElement.ParentNode).InsertBefore(MDNPreBox, PreElement);
+         MDNBox := MDNPreBox;
+      end
+      else
+         // For annotations to items inside headings, insert the annotation box
+         // right after the end of element being annotated. (Inserting the
+         // annotation after the heading faciliates aligning correctly.)
+         if (Element.HasProperties(propHeading)) then
+         begin
+            if ((Element.NextSibling is TElement)
+                  and ((Element.NextSibling as TElement)
+                     .GetAttribute('class').AsString = 'mdn')) then
+               // If there's already an MDN box at the point where we want this,
+               // then just re-use it (instead of creating another one).
+               MDNBox := Element.NextSibling as TElement
+            else
+               (Element.ParentNode as TElement)
+                  .InsertBefore(MDNBox, Element.NextSibling);
+         end
+      else
+         // In this case, the elements being annotated have parents that are dt
+         // or td elements, or the elements themselves are th elements. So in
+         // order to get the annotations aligned correctly, the annotations are
+         // appended to the element being annotated.
+         if (((Element.ParentNode as TElement).LastChild is TElement)
+               and (((Element.ParentNode as TElement).LastChild as TElement)
+                  .GetAttribute('class').AsString = 'mdn')) then
+            // If there's already an MDN box at the point where we want this,
+            // then just re-use it (instead of creating another one).
+            MDNBox := (Element.ParentNode as TElement).LastChild as TElement
+         else
+            Element.AppendChild(MDNBox);
+      // Add an ellipses button unless one has already been added.
+      if (not((MDNBox.FirstChild is TElement)
+            and TElement(MDNBox.FirstChild).IsIdentity(nsHTML, eInput))) then
+         MDNBox.AppendChild(MDNButton);
+      // Get the MDN details for this annotation.
+      for MDNDetails in TJSONArray(MDNJSONData[ID]) do
+      begin
+         // MDNJSONData[ID] is an array of arrays, where each array is data
+         // associated with a particular MDN article which links to the given ID
+         // in the HTML spec. We loop through those arrays and assign each to an
+         // MDNDetails, which contains data for a particular MDN article: the
+         // MDN article path, MDN article title, and MDN article summary.
+         //
+         // Example showing the structure of the JSON data:
+         // "workers": [                    <= HTML spec ID
+         //   [
+         //     "API/Web_Workers_API",      <= MDN article path
+         //     "Web Workers API",          <= MDN article title
+         //     "Web Workers makes it ..."  <= MDN article summary
+         //   ],
+         //   [
+         //     "API/Web_Workers_API/Using_web_workers",
+         //     "Using Web Workers",
+         //     "Web Workers is a simple means for web content to ..."
+         //   ]
+         // ]
+         MDNPath := MDNDetails[0];
+         MDNTitle := MDNDetails[1];
+         MDNSummary := MDNDetails[2];
+         MDNBox.AppendChild(E(eP, [
+            E(eB, [T('MDN')]), T(' '),
+            E(eA, ['href', kMDNURLBase + MDNPath, 'title', MDNSummary],
+            Document, [T(MDNTitle, Document)])]))
+      end;
+   end;
+
    function ProcessNode(var Node: TNode): Boolean; // return True if we are to keep this node, False if we drop it
    const
       SourceGitBaseURL: AnsiString = 'https://github.com/whatwg/html/commit/';
@@ -1140,6 +1248,69 @@ var
 
    procedure ProcessNodeExit(const Node: TElement);
    begin
+      InsertMDNAnnotationForElement(Node);
+      // TODO: Move the styles below to https://resources.whatwg.org/spec.css or
+      // https://resources.whatwg.org/standard.css and remove the following
+      // before merging this patch.
+      if (Node.IsIdentity(nsHTML, eHead)) then
+         Node.AppendChild(E(eStyle,
+            [T('.mdn {'
+               + '  display: block;'
+               + '  font: 12px sans-serif;'
+               + '  position: absolute; '
+               + '  z-index: 9;'
+               + '  right: 0.3em;'
+               + '  background-color: #eee;'
+               + '  margin: -26px 0 0 0;'
+               + '  padding: 7px 5px 5px 6px;'
+               + '  min-width: 140px;'
+               + '  box-shadow: 0 0 3px #999;'
+               + '}'
+               + ' .mdn input {'
+               + '   cursor: pointer;'
+               + '   position: absolute;'
+               + '   left: 0;'
+               + '   top: -2px;'
+               + '   height: 1em;'
+               + '   border: none;'
+               + '   color: #000;'
+               + '   background: transparent;'
+               + '   margin-left: -8px;'
+               + '   font-size: 10px;'
+               + '   line-height: 1em;'
+               + '}'
+               + ' .mdn b {'
+               + '  color: #fff;'
+               + '  background-color: #000;'
+               + '  font-weight: normal; '
+               + '  font-family: zillaslab,Palatino,"Palatino Linotype",serif;'
+               + '  padding: 2px 3px 0px 3px;'
+               + '  line-height: 1.3em;'
+               + '}'
+               + ' .mdn p:nth-child(n+3) > b {'
+               + '  color: #eee;'
+               + '  background-color: #eee;'
+               + '}'
+               + ' p + .mdn { margin-top: -45px }'
+               + ' .mdn.before_pre { margin-top: 2px }'
+               + ' h2 + .mdn { margin: -48px 0 0 0; }'
+               + ' h3 + .mdn { margin: -46px 0 0 0; }'
+               + ' h4 + .mdn { margin: -42px 0 0 0; }'
+               + ' h5 + .mdn { margin: -40px 0 0 0; }'
+               + ' h6 + .mdn { margin: -40px 0 0 0; }'
+               + ' .mdn p { margin: 0; }'
+               + ' .mdn :link { color: #0000EE; }'
+               + ' .mdn :visited { color: #551A8B; }'
+               + ' .mdn :link:active, :visited:active { color: #FF0000; }'
+               + ' .mdn :link, :visited {'
+               + '   text-decoration: underline;'
+               + '   cursor: pointer;'
+               + '}'
+               + ' .mdn.wrapped { min-width: 0px; }'
+               + ' .mdn.wrapped a { display: none; }'
+               + ' .mdn:hover { z-index: 11; }'
+               + ' .mdn:focus-within { z-index: 11; }'
+               )]));
       if (Node = InHeading) then
          InHeading := nil
       else
@@ -1756,107 +1927,6 @@ Result := False;
          Result := False;
    end;
 
-   procedure InsertMDNAnnotationForElement(const Element: TElement);
-   var
-      MDNDetails: TJSONArray;
-      ID, MDNPath, MDNTitle, MDNSummary: UTF8String;
-      MDNBox, MDNButton, IDLCommentStart, IDLCommentEnd: TElement;
-   const
-      kMDNURLBase = 'https://developer.mozilla.org/en-US/docs/Web/';
-   begin
-      if ((CurrentVariant = vHTML) and InSplit) then
-         // MDN annotations have already been inserted in this case.
-         exit;
-      if (not(Element.HasAttribute('id'))) then
-         exit;
-      ID := Element.GetAttribute('id').AsString;
-      if (not(MDNJSONData[ID] is TJSONArray)) then
-         // No MDN article has a link to this ID.
-         exit;
-      MDNBox := E(eSpan, ['class', 'mdn']);
-      MDNButton := E(eInput, ['onclick', 'toggleStatus(this)',
-                     'value', '⋰', 'type', 'button']);
-      MDNBox.AppendChild(MDNButton);
-      if (HasAncestor(Element, nsHTML, ePre)
-         or Element.HasProperties(propHeading)) then
-      begin
-         // For annotations to items inside <pre> elements or headings, insert
-         // the annotation box right after the element being annotated. (We do
-         // this in order to get it aligned right.
-         if ((Element.NextSibling is TElement)
-               and ((Element.NextSibling as TElement)
-                  .GetAttribute('class').AsString = 'mdn')) then
-            // If there's already an MDN box at the point where we want this,
-            // then just re-use it (instead of creating another one).
-            MDNBox := Element.NextSibling as TElement
-         else
-            (Element.ParentNode as TElement)
-               .InsertBefore(MDNBox, Element.NextSibling);
-      end
-      else
-      begin
-         if (((Element.ParentNode as TElement).LastChild is TElement)
-               and (((Element.ParentNode as TElement).LastChild as TElement)
-                  .GetAttribute('class').AsString = 'mdn')) then
-            // If there's already an MDN box at the point where we want this,
-            // then just re-use it (instead of creating another one).
-            MDNBox := (Element.ParentNode as TElement).LastChild as TElement
-         else
-            if (Element.IsIdentity(nsHTML, eA)
-                  or Element.IsIdentity(nsHTML, eCode)
-                  or Element.IsIdentity(nsHTML, eSpan)
-                  or Element.IsIdentity(nsHTML, eDfn)) then
-               (Element.ParentNode as TElement).AppendChild(MDNBox)
-            else
-               Element.AppendChild(MDNBox);
-      end;
-      for MDNDetails in TJSONArray(MDNJSONData[ID]) do
-      begin
-         // MDNJSONData[ID] is an array of arrays, where each array is data
-         // associated with a particular MDN article which links to the given ID
-         // in the HTML spec. We loop through those arrays and assign each to an
-         // MDNDetails, which contains data for a particular MDN article: the
-         // MDN article path, MDN article title, and MDN article summary.
-         //
-         // Example showing the structure of the JSON data:
-         // "workers": [                    <= HTML spec ID
-         //   [
-         //     "API/Web_Workers_API",      <= MDN article path
-         //     "Web Workers API",          <= MDN article title
-         //     "Web Workers makes it ..."  <= MDN article summary
-         //   ],
-         //   [
-         //     "API/Web_Workers_API/Using_web_workers",
-         //     "Using Web Workers",
-         //     "Web Workers is a simple means for web content to ..."
-         //   ]
-         // ]
-         MDNPath := MDNDetails[0];
-         MDNTitle := MDNDetails[1];
-         MDNSummary := MDNDetails[2];
-         if (HasAncestor(Element, nsHTML, ePre)) then
-         begin
-            // Wrap the annotation in WebIDL comment delimiters to keep the
-            // highligher's WebIDL parser from failing with a syntax error.
-            IDLCommentStart := E(eI, ['hidden', ''], Document, [T('/*')]);
-            IDLCommentEnd := E(eI, ['hidden', ''], Document, [T('*/')]);
-            MDNBox.AppendChild(E(eSpan, [
-               IDLCommentStart,
-               E(eB, [T('MDN')]), T(' '),
-               E(eA, ['href', kMDNURLBase + MDNPath, 'title', MDNSummary],
-               Document, [T(MDNTitle, Document)]),
-               IDLCommentEnd]))
-         end
-         else
-         begin
-            MDNBox.AppendChild(E(eSpan, [
-               E(eB, [T('MDN')]), T(' '),
-               E(eA, ['href', kMDNURLBase + MDNPath, 'title', MDNSummary],
-               Document, [T(MDNTitle, Document)])]))
-         end;
-      end;
-   end;
-
    function SkippableTBodyStartTag(const Element: TElement): Boolean;
    begin
 Result := False;
@@ -1951,6 +2021,64 @@ Result := False;
          Write(F, HTMLFragment);
    end;
 
+   procedure InsertMDNAnnotationForElementWithPAncestor(const Element: TElement);
+   var
+      MDNDetails: TJSONArray;
+      Candidate: TNode;
+      ID, MDNPath, MDNTitle, MDNSummary: UTF8String;
+      PElement, MDNBox, MDNButton: TElement;
+   const
+      kMDNURLBase = 'https://developer.mozilla.org/en-US/docs/Web/';
+   begin
+      // In order to minimize the cases where an annotation overlaps with the
+      // spec text, annotations for elements with p ancestors are handled
+      // separately here. The annotations are inserted after the p-element
+      // ancestor of the element being annotated.
+      if ((CurrentVariant = vHTML) and InSplit) then
+         // MDN annotations have already been inserted in this case.
+         exit;
+      if (not(Element.HasAttribute('id'))) then
+         exit;
+      ID := Element.GetAttribute('id').AsString;
+      if (not(MDNJSONData[ID] is TJSONArray)) then
+         // No MDN article has a link to this ID.
+         exit;
+      MDNBox := E(eAside, ['class', 'mdn']);
+      MDNButton := E(eInput, ['onclick', 'toggleStatus(this)',
+                     'value', '⋰', 'type', 'button']);
+      Candidate := Element;
+      repeat
+         Candidate := Candidate.ParentNode;
+         if (not (Candidate is TElement)) then
+            exit;
+      until (TElement(Candidate).IsIdentity(nsHTML, eP));
+      PElement := TElement(Candidate);
+      if ((PElement.NextSibling is TElement)
+            and (TElement(PElement.NextSibling)
+               .GetAttribute('class').AsString = 'mdn')) then
+         // If there's already an MDN box at the point where we want this,
+         // then just re-use it (instead of creating another one).
+         MDNBox := TElement(PElement.NextSibling)
+      else
+         TElement(PElement.ParentNode)
+            .InsertBefore(MDNBox, PElement.NextSibling);
+      // Add an ellipses button unless one has already been added.
+      if (not((MDNBox.FirstChild is TElement)
+            and TElement(MDNBox.FirstChild).IsIdentity(nsHTML, eInput))) then
+         MDNBox.AppendChild(MDNButton);
+      // Get the MDN details for this annotation.
+      for MDNDetails in TJSONArray(MDNJSONData[ID]) do
+      begin
+         MDNPath := MDNDetails[0];
+         MDNTitle := MDNDetails[1];
+         MDNSummary := MDNDetails[2];
+         MDNBox.AppendChild(E(eP, [
+            E(eB, [T('MDN')]), T(' '),
+            E(eA, ['href', kMDNURLBase + MDNPath, 'title', MDNSummary],
+               Document, [T(MDNTitle, Document)])]))
+      end;
+   end;
+
    procedure WalkIn(const Element: TElement);
    var
       IsExcluder, Skip, NotFirstAttribute: Boolean;
@@ -1958,7 +2086,6 @@ Result := False;
       AttributeName, EscapedAttributeName, EscapedAttributeValue: UTF8String;
       Quotes: TQuoteType;
       Variant: TAllVariants;
-      Style: TElement;
    begin
       // The following causes the <pre> start tag for any empty pre elements to
       // be dropped. We can end up with empty pre elements because the first
@@ -1966,71 +2093,6 @@ Result := False;
       // behind the (now-empty) pre parents of the <code class="idl"> elements.
       if Element.IsIdentity(nsHTML, ePre) and (Element.TextContent.AsString = '') then
          exit;
-      // TODO: Move the styles below to https://resources.whatwg.org/spec.css or
-      // https://resources.whatwg.org/standard.css and remove the following
-      // before merging this patch.
-      if (Element.IsIdentity(nsHTML, eHead)) then
-      begin
-         Style := E(eStyle,
-            [T('.mdn {'
-               + '  display: block;'
-               + '  font: 12px sans-serif;'
-               + '  position: absolute; '
-               + '  z-index: 9;'
-               + '  right: 0.3em;'
-               + '  background-color: #eee;'
-               + '  margin: -28px 0 0 0;'
-               + '  padding: 7px 5px 5px 6px;'
-               + '  min-width: 140px;'
-               + '  box-shadow: 0 0 3px #999;'
-               + '}'
-               + ' .mdn input {'
-               + '   cursor: pointer;'
-               + '   position: absolute;'
-               + '   left: 0;'
-               + '   top: -2px;'
-               + '   height: 1em;'
-               + '   border: none;'
-               + '   color: #000;'
-               + '   background: transparent;'
-               + '   margin-left: -8px;'
-               + '   font-size: 10px;'
-               + '   line-height: 1em;'
-               + '}'
-               + ' .mdn b {'
-               + '  color: #fff;'
-               + '  background-color: #000;'
-               + '  font-weight: normal; '
-               + '  font-family: zillaslab,Palatino,"Palatino Linotype",serif;'
-               + '  padding: 2px 3px 0px 3px;'
-               + '  line-height: 1.3em;'
-               + '}'
-               + ' .mdn span:nth-child(n+3) > b {'
-               + '  color: #eee;'
-               + '  background-color: #eee;'
-               + '}'
-               + ' pre .mdn { margin: -26px 0 0 0; }'
-               + ' h2 + .mdn { margin: -48px 0 0 0; }'
-               + ' h3 + .mdn { margin: -46px 0 0 0; }'
-               + ' h4 + .mdn { margin: -42px 0 0 0; }'
-               + ' h5 + .mdn { margin: -40px 0 0 0; }'
-               + ' h6 + .mdn { margin: -40px 0 0 0; }'
-               + ' .mdn span { display: block }'
-               + ' .mdn :link { color: #0000EE; }'
-               + ' .mdn :visited { color: #551A8B; }'
-               + ' .mdn :link:active, :visited:active { color: #FF0000; }'
-               + ' .mdn :link, :visited {'
-               + '   text-decoration: underline;'
-               + '   cursor: pointer;'
-               + '}'
-               + ' .mdn.wrapped { min-width: 0px; }'
-               + ' .mdn.wrapped a { display: none; }'
-               + ' .mdn:hover { z-index: 11; }'
-               + ' .mdn:focus-within { z-index: 11; }'
-               )]);
-         Element.AppendChild(Style);
-      end;
-      InsertMDNAnnotationForElement(Element);
       IsExcluder := DetermineIsExcluder(Element, AttributeCount);
       if ((not IsExcluder) and ((AttributeCount > 0) or (not (Element.HasProperties(propOptionalStartTag) or SkippableTBodyStartTag(Element))))) then
       begin
@@ -2157,6 +2219,12 @@ Result := False;
          CurrentElement := TElement(Element.ParentNode)
       else
          CurrentElement := nil;
+   if (HasAncestor(Element, nsHTML, eP)) then
+      // Elements other than those with p ancestors are handled earlier.
+      // Elements with p ancestors are handled here because the annotations need
+      // to be inserted after the end tag for the p element has been emitted.
+      // Otherwise the annotation ends up getting inserted within the p element.
+      InsertMDNAnnotationForElementWithPAncestor(Element);
    end;
 
 var
