@@ -639,7 +639,7 @@ var
    var
       MDNDetails: TJSONArray;
       Candidate: TNode;
-      ID, MDNPath, MDNTitle, MDNSummary: UTF8String;
+      ID, MDNPath, MDNSubpath, MDNTitle, MDNSummary: UTF8String;
       PreElement, MDNPreBox, MDNBox, MDNButton: TElement;
    const
       kMDNURLBase = 'https://developer.mozilla.org/en-US/docs/Web/';
@@ -736,10 +736,11 @@ var
          MDNPath := MDNDetails[0];
          MDNTitle := MDNDetails[1];
          MDNSummary := MDNDetails[2];
+         MDNSubpath := Copy(MDNPath, Pos('/', MDNPath) + 1);
          MDNBox.AppendChild(E(eP, [
             E(eB, [T('MDN')]), T(' '),
             E(eA, ['href', kMDNURLBase + MDNPath, 'title', MDNSummary],
-            Document, [T(MDNTitle, Document)])]))
+               Document, [T(MDNSubpath, Document)])]))
       end;
    end;
 
@@ -2025,7 +2026,7 @@ Result := False;
    var
       MDNDetails: TJSONArray;
       Candidate: TNode;
-      ID, MDNPath, MDNTitle, MDNSummary: UTF8String;
+      ID, MDNPath, MDNSubpath, MDNTitle, MDNSummary: UTF8String;
       PElement, MDNBox, MDNButton: TElement;
    const
       kMDNURLBase = 'https://developer.mozilla.org/en-US/docs/Web/';
@@ -2072,10 +2073,11 @@ Result := False;
          MDNPath := MDNDetails[0];
          MDNTitle := MDNDetails[1];
          MDNSummary := MDNDetails[2];
+         MDNSubpath := Copy(MDNPath, Pos('/', MDNPath) + 1);
          MDNBox.AppendChild(E(eP, [
             E(eB, [T('MDN')]), T(' '),
             E(eA, ['href', kMDNURLBase + MDNPath, 'title', MDNSummary],
-               Document, [T(MDNTitle, Document)])]))
+               Document, [T(MDNSubpath, Document)])]))
       end;
    end;
 
