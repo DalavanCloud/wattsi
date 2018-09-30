@@ -56,10 +56,12 @@ type
    TAllVariants = (vHTML, vDEV, vSnap, vReview, vSplit);
    TVariants = vHTML..vReview;
    TStringMap = specialize THashTable <UTF8String, UTF8String, UTF8StringUtils>;
+   TMDNBrowsers = specialize TFPGMap <UTF8String, UTF8String>; // preserves order
 
 var
    HighlighterOutputByJSONContents: TStringMap;
    MDNJSONData: TJSON;
+   MDNBrowsers: TMDNBrowsers;
    CurrentVariant: TAllVariants;
 
 const
@@ -156,6 +158,145 @@ begin
       end;
    until (TElement(Element).IsIdentity(TestNamespaceURL, TestLocalName));
    Result := True;
+end;
+
+procedure AddMDNBrowserRow(const SupportTable: TElement;
+                           const BrowserID: UTF8String;
+                           const YesNoUnknown: UTF8String;
+                           const Version: UTF8String;
+                           const Document: TDocument);
+var
+   YNU, YNULowercase: UTF8String;
+   BrowserRow: TElement;
+begin
+   YNU := YesNoUnknown;
+   YNULowercase := LowerCase(YesNoUnknown);
+   if (YNU = 'Unknown') then
+      YNU := '?';
+   BrowserRow := E(eSpan, ['class', BrowserID + ' ' + YNULowercase], Document);
+   BrowserRow.AppendChild(E(eSpan, [T(MDNBrowsers[BrowserID], Document)]));
+   if (Version = '') then
+      BrowserRow.AppendChild(E(eSpan, [T(YNU, Document)]))
+   else
+      BrowserRow.AppendChild(E(eSpan, [T(Version, Document)]));
+   SupportTable.AppendChild(BrowserRow);
+end;
+
+procedure ProcessBrowserData(const BrowserID: UTF8String;
+                             const VersionData: TJSONObject;
+                             const SupportTable: TElement;
+                             const Document: TDocument);
+var
+   VersionAdded: TJSON;
+begin
+   if (Assigned(VersionData['version_removed'])) then
+      AddMDNBrowserRow(SupportTable, BrowserID, 'No', '', Document)
+   else
+   begin
+      VersionAdded := VersionData['version_added'];
+      if (not(Assigned(VersionAdded))) then
+         AddMDNBrowserRow(SupportTable, BrowserID, 'Unknown', '', Document)
+      else
+      if (VersionAdded is TJSONBoolean) then
+      begin
+         if TJSONBoolean(VersionAdded) then
+            AddMDNBrowserRow(SupportTable, BrowserID, 'Yes', '', Document)
+         else
+            AddMDNBrowserRow(SupportTable, BrowserID, 'No', '', Document);
+      end
+      else
+      if (VersionAdded is TJSONString) then
+         AddMDNBrowserRow(SupportTable, BrowserID, 'Yes',
+                          UTF8String(VersionAdded) + '+', Document)
+   end;
+end;
+
+procedure AddMDNBox(const MDNBox: TElement;
+                    const ID: UTF8String;
+                    const Document: TDocument);
+var
+   MDNData: TJSONArray;
+   MDNSupport: TJSONObject;
+   MDNButton, MDNDiv, MDNDetails, SupportTable: TElement;
+   MDNPath, MDNSubpath, MDNTitle, MDNSummary, BrowserID: UTF8String;
+   i, j: Integer;
+const
+   kMDNURLBase = 'https://developer.mozilla.org/en-US/docs/Web/';
+begin
+   // Add an ellipses button unless one has already been added.
+   if (not((MDNBox.FirstChild is TElement)
+         and TElement(MDNBox.FirstChild).IsIdentity(nsHTML, eInput))) then
+   begin
+      MDNButton := E(eInput, ['onclick', 'toggleStatus(this)',
+                     'value', '⋰', 'type', 'button']);
+      MDNBox.AppendChild(MDNButton);
+   end;
+   // Get the MDN details for this annotation.
+   for MDNData in TJSONArray(MDNJSONData[ID]) do
+   begin
+      // MDNJSONData[ID] is an array of arrays, where each array is data
+      // associated with a particular MDN article which links to the given ID in
+      // the HTML spec. We loop through those arrays and assign each to an
+      // MDNData, which contains data for a particular MDN article: the article
+      // path, article title, article summary, and browser-support data.
+      //
+      // Example showing the structure of the JSON data:
+      //
+      // "sharedworker": [                         <= HTML spec ID
+      //   [
+      //     "API/SharedWorker",                   <= MDN article path
+      //     "SharedWorker",                       <= MDN article title
+      //     "The SharedWorker interface..."       <= MDN article summary
+      //     {"chrome":{"version_added": "4"},...  <= MDN browser-support data
+      //   ],
+      //   [
+      //     /* data from another MDN article associated with this spec ID */
+      //   ]
+      // ]
+      //
+      // Note that, in the browser-support data, the value for a particular
+      // browser-ID key (e.g., "chrome") can optionally be an array of objects
+      // (instead of just a single object as shown in example above).
+      // See https://goo.gl/uejWa4 for documentation on the structure.
+      MDNPath := MDNData[0];
+      MDNTitle := MDNData[1];
+      MDNSummary := MDNData[2];
+      MDNSubpath := Copy(MDNPath, Pos('/', MDNPath) + 1);
+      MDNDiv := E(eDiv);
+      MDNDiv.AppendChild(E(eB, [T('MDN')]));
+      MDNDiv.AppendChild(T(' '));
+      MDNDetails := E(eDetails);
+      MDNDetails.AppendChild(E(eSummary, [
+         E(eA, ['href', kMDNURLBase + MDNPath, 'title', MDNSummary],
+            Document, [T(MDNSubpath, Document)])]));
+      MDNDiv.AppendChild(MDNDetails);
+      MDNBox.AppendChild(MDNDiv);
+      if (MDNData.Length = 3) then
+      begin
+         SupportTable := E(eP, ['class', 'nosupportdata']);
+         SupportTable.AppendChild(T('No support data.'));
+         MDNDetails.AppendChild(SupportTable);
+         continue;
+      end;
+      MDNSupport := MDNData[3];
+      SupportTable := E(eP, ['class', 'mdnsupport']);
+      MDNDetails.AppendChild(SupportTable);
+      for i := 0 to MDNBrowsers.Count - 1 do
+      begin
+         BrowserID := MDNBrowsers.Keys[i];
+         if (not(Assigned(MDNSupport[BrowserID]))) then
+            AddMDNBrowserRow(SupportTable, BrowserID, 'Unknown', '', Document)
+         else
+         if (MDNSupport[BrowserID] is TJSONArray) then
+            // MDN support data for a given browser can be an array of objects.
+            for j := 0 to MDNSupport[BrowserID].Length - 1 do
+               ProcessBrowserData(BrowserID, MDNSupport[BrowserID][j],
+                                  SupportTable, Document)
+         else
+            ProcessBrowserData(BrowserID, MDNSupport[BrowserID],
+                               SupportTable, Document);
+      end;
+   end;
 end;
 
 procedure ProcessDocument(const Document: TDocument; const Variant: TVariants; out BigTOC: TElement; const SourceGitSHA: AnsiString);
@@ -637,12 +778,9 @@ var
 
    procedure InsertMDNAnnotationForElement(const Element: TElement);
    var
-      MDNDetails: TJSONArray;
       Candidate: TNode;
-      ID, MDNPath, MDNSubpath, MDNTitle, MDNSummary: UTF8String;
-      PreElement, MDNPreBox, MDNBox, MDNButton: TElement;
-   const
-      kMDNURLBase = 'https://developer.mozilla.org/en-US/docs/Web/';
+      ID: UTF8String;
+      PreElement, MDNPreBox, MDNBox: TElement;
    begin
       if (HasAncestor(Element, nsHTML, eP)) then
          // Annotations for elements with p ancestors are handled later.
@@ -655,8 +793,6 @@ var
          exit;
       MDNBox := E(eAside, ['class', 'mdn']);
       MDNPreBox := E(eAside, ['class', 'mdn before_pre']);
-      MDNButton := E(eInput, ['onclick', 'toggleStatus(this)',
-                     'value', '⋰', 'type', 'button']);
       Candidate := Element;
       if (HasAncestor(Element, nsHTML, ePre)) then
       begin
@@ -707,41 +843,7 @@ var
             MDNBox := (Element.ParentNode as TElement).LastChild as TElement
          else
             Element.AppendChild(MDNBox);
-      // Add an ellipses button unless one has already been added.
-      if (not((MDNBox.FirstChild is TElement)
-            and TElement(MDNBox.FirstChild).IsIdentity(nsHTML, eInput))) then
-         MDNBox.AppendChild(MDNButton);
-      // Get the MDN details for this annotation.
-      for MDNDetails in TJSONArray(MDNJSONData[ID]) do
-      begin
-         // MDNJSONData[ID] is an array of arrays, where each array is data
-         // associated with a particular MDN article which links to the given ID
-         // in the HTML spec. We loop through those arrays and assign each to an
-         // MDNDetails, which contains data for a particular MDN article: the
-         // MDN article path, MDN article title, and MDN article summary.
-         //
-         // Example showing the structure of the JSON data:
-         // "workers": [                    <= HTML spec ID
-         //   [
-         //     "API/Web_Workers_API",      <= MDN article path
-         //     "Web Workers API",          <= MDN article title
-         //     "Web Workers makes it ..."  <= MDN article summary
-         //   ],
-         //   [
-         //     "API/Web_Workers_API/Using_web_workers",
-         //     "Using Web Workers",
-         //     "Web Workers is a simple means for web content to ..."
-         //   ]
-         // ]
-         MDNPath := MDNDetails[0];
-         MDNTitle := MDNDetails[1];
-         MDNSummary := MDNDetails[2];
-         MDNSubpath := Copy(MDNPath, Pos('/', MDNPath) + 1);
-         MDNBox.AppendChild(E(eP, [
-            E(eB, [T('MDN')]), T(' '),
-            E(eA, ['href', kMDNURLBase + MDNPath, 'title', MDNSummary],
-               Document, [T(MDNSubpath, Document)])]))
-      end;
+      AddMDNBox(MDNBox, ID, Document);
    end;
 
    function ProcessNode(var Node: TNode): Boolean; // return True if we are to keep this node, False if we drop it
@@ -1287,8 +1389,110 @@ var
                + '  font-family: zillaslab,Palatino,"Palatino Linotype",serif;'
                + '  padding: 2px 3px 0px 3px;'
                + '  line-height: 1.3em;'
+               + '  vertical-align: top;'
                + '}'
-               + ' .mdn p:nth-child(n+3) > b {'
+               + ' .mdn details {'
+               + '  display: inline;'
+               + '}'
+               + ' .mdn summary a {'
+               + '  margin-left: -4px;'
+               + '}'
+               + ' .nosupportdata {'
+               + '  font-style: italic;'
+               + '  margin-top: 4px;'
+               + '  margin-left: 8px;'
+               + '  padding-bottom: 8px;'
+               + '}'
+               + ' .mdnsupport {'
+               + '  display: table;'
+               + '  margin-top: 4px;'
+               + '}'
+               + ' .mdnsupport > span {'
+               + '  display: table-row;'
+               + '  padding: 0.2em 0;'
+               + '  padding-top: 0.2em;'
+               + '  font-size: 9.6px;'
+               + '}'
+               + ' .mdnsupport > span > span {'
+               + '  display: table-cell;'
+               + '  padding: 0 0.5em;'
+               + '  vertical-align: top;'
+               + '  line-height: 1.5em;'
+               + '}'
+               + ' .mdnsupport > span > span:last-child {'
+               + '  text-align: right;'
+               + '  padding: 0;'
+               + '}'
+               + ' .mdnsupport > span.no {'
+               + '  color: #CCCCCC;'
+               + '  filter: grayscale(100%);'
+               + '}'
+               + ' .mdnsupport > span.unknown {'
+               + '  color: #CCCCCC;'
+               + '  filter: grayscale(100%);'
+               + '}'
+               + ' .mdnsupport > span.no::before {'
+               + '  opacity:  0.5;'
+               + '}'
+               + ' .mdnsupport > span.unknown::before {'
+               + '  opacity:  0.5;'
+               + '}'
+               + '.mdnsupport > span::before {'
+               + '    content: "";'
+               + '    display: table-cell;'
+               + '    min-width: 1.5em;'
+               + '    height: 1.5em;'
+               + '    background: no-repeat center center;'
+               + '        background-image: none;'
+               + '        background-size: auto auto;'
+               + '    background-size: contain;'
+               + '    text-align: right;'
+               + '    font-size: 0.75em;'
+               + '    font-weight: bold;'
+               + '}'
+               + ' .mdnsupport > .chrome::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/chrome.svg);'
+               + '}'
+               + ' .mdnsupport > .chrome_android::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/chrome.svg);'
+               + '}'
+               + ' .mdnsupport > .edge::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/edge.svg);'
+               + '}'
+               + ' .mdnsupport > .edge_mobile::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/edge.svg);'
+               + '}'
+               + ' .mdnsupport > .firefox::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/firefox.png);'
+               + '}'
+               + ' .mdnsupport > .firefox_android::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/firefox.png);'
+               + '}'
+               + ' .mdnsupport > .ie::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/ie.png);'
+               + '}'
+               + ' .mdnsupport > .opera::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/opera.png);'
+               + '}'
+               + ' .mdnsupport > .opera_android::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/opera.png);'
+               + '}'
+               + ' .mdnsupport > .safari::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/safari.png);'
+               + '}'
+               + ' .mdnsupport > .safari_ios::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/safari-ios.svg);'
+               + '}'
+               + ' .mdnsupport > .safari_ios::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/safari-ios.svg);'
+               + '}'
+               + ' .mdnsupport > .samsunginternet_android::before {'
+               + '  background-image: url(https://resources.whatwg.org/browser-logos/samsung.png);'
+               + '}'
+               + ' .mdnsupport > .webview_android::before {'
+               + '  background-image: url(https://cdnjs.loli.net/ajax/libs/browser-logos/41.0.0/android-webview-beta/android-webview-beta_32x32.png);'
+               + '}'
+               + ' .mdn div:nth-child(n+3) > b {'
                + '  color: #eee;'
                + '  background-color: #eee;'
                + '}'
@@ -1299,7 +1503,7 @@ var
                + ' h4 + .mdn { margin: -42px 0 0 0; }'
                + ' h5 + .mdn { margin: -40px 0 0 0; }'
                + ' h6 + .mdn { margin: -40px 0 0 0; }'
-               + ' .mdn p { margin: 0; }'
+               + ' .mdn div { margin: 0; }'
                + ' .mdn :link { color: #0000EE; }'
                + ' .mdn :visited { color: #551A8B; }'
                + ' .mdn :link:active, :visited:active { color: #FF0000; }'
@@ -1308,7 +1512,7 @@ var
                + '   cursor: pointer;'
                + '}'
                + ' .mdn.wrapped { min-width: 0px; }'
-               + ' .mdn.wrapped a { display: none; }'
+               + ' .mdn.wrapped details { display: none; }'
                + ' .mdn:hover { z-index: 11; }'
                + ' .mdn:focus-within { z-index: 11; }'
                )]));
@@ -2024,12 +2228,9 @@ Result := False;
 
    procedure InsertMDNAnnotationForElementWithPAncestor(const Element: TElement);
    var
-      MDNDetails: TJSONArray;
       Candidate: TNode;
-      ID, MDNPath, MDNSubpath, MDNTitle, MDNSummary: UTF8String;
-      PElement, MDNBox, MDNButton: TElement;
-   const
-      kMDNURLBase = 'https://developer.mozilla.org/en-US/docs/Web/';
+      ID: UTF8String;
+      PElement, MDNBox: TElement;
    begin
       // In order to minimize the cases where an annotation overlaps with the
       // spec text, annotations for elements with p ancestors are handled
@@ -2045,8 +2246,6 @@ Result := False;
          // No MDN article has a link to this ID.
          exit;
       MDNBox := E(eAside, ['class', 'mdn']);
-      MDNButton := E(eInput, ['onclick', 'toggleStatus(this)',
-                     'value', '⋰', 'type', 'button']);
       Candidate := Element;
       repeat
          Candidate := Candidate.ParentNode;
@@ -2063,22 +2262,7 @@ Result := False;
       else
          TElement(PElement.ParentNode)
             .InsertBefore(MDNBox, PElement.NextSibling);
-      // Add an ellipses button unless one has already been added.
-      if (not((MDNBox.FirstChild is TElement)
-            and TElement(MDNBox.FirstChild).IsIdentity(nsHTML, eInput))) then
-         MDNBox.AppendChild(MDNButton);
-      // Get the MDN details for this annotation.
-      for MDNDetails in TJSONArray(MDNJSONData[ID]) do
-      begin
-         MDNPath := MDNDetails[0];
-         MDNTitle := MDNDetails[1];
-         MDNSummary := MDNDetails[2];
-         MDNSubpath := Copy(MDNPath, Pos('/', MDNPath) + 1);
-         MDNBox.AppendChild(E(eP, [
-            E(eB, [T('MDN')]), T(' '),
-            E(eA, ['href', kMDNURLBase + MDNPath, 'title', MDNSummary],
-               Document, [T(MDNSubpath, Document)])]))
-      end;
+      AddMDNBox(MDNBox, ID, Document);
    end;
 
    procedure WalkIn(const Element: TElement);
@@ -2835,7 +3019,7 @@ begin
       begin
          Writeln('wattsi: invalid arguments');
          Writeln('syntax:');
-         Writeln('  wattsi [--quiet] <source-file> <source-git-sha> <output-directory> <default-or-review> <caniuse.json> <id-map.json> [<highlight-server-url>]');
+         Writeln('  wattsi [--quiet] <source-file> <source-git-sha> <output-directory> <default-or-review> <caniuse.json> <mdn-spec-links/html.json> [<highlight-server-url>]');
          Writeln('  wattsi --version');
          exit;
       end;
@@ -2854,6 +3038,26 @@ begin
    try
       Inform('Parsing MDN data...');
       MDNJSONData := ParseJSON(ReadTextFile(ParamStr(6 + ParamOffset)));
+      MDNBrowsers := TMDNBrowsers.Create;
+      // The browser IDs here must match the ones in the imported JSON data.
+      // See the list of browser IDs at https://goo.gl/iDacWP.
+      MDNBrowsers['chrome'] := 'Chrome';
+      MDNBrowsers['chrome_android'] := 'Chrome Android';
+      MDNBrowsers['edge'] := 'Edge';
+      MDNBrowsers['edge_mobile'] := 'Edge Mobile';
+      MDNBrowsers['firefox'] := 'Firefox';
+      MDNBrowsers['firefox_android'] := 'Firefox Android';
+      MDNBrowsers['ie'] := 'Internet Explorer';
+      // MDNBrowsers['nodejs'] := 'Node.js'; // no data for features in HTML
+      MDNBrowsers['opera'] := 'Opera';
+      MDNBrowsers['opera_android'] := 'Opera Android';
+      // MDNBrowsers['qq_android'] := 'QQ Browser'; // not enough data for features in HTML
+      MDNBrowsers['safari'] := 'Safari';
+      MDNBrowsers['safari_ios'] := 'iOS Safari';
+      MDNBrowsers['samsunginternet_android'] := 'Samsung Internet';
+      // MDNBrowsers['uc_android'] := 'UC Browser'; // not enough data for features in HTML
+      // MDNBrowsers['uc_chinese_android'] := 'Chinese UC Browser'; // not enough data for features in HTML
+      MDNBrowsers['webview_android'] := 'WebView Android';
       PreProcessCanIUseData(ParamStr(5 + ParamOffset));
       {$IFDEF VERBOSE_PREPROCESSORS}
          if (Assigned(Features)) then
