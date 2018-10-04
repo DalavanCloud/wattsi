@@ -815,34 +815,18 @@ var
          MDNBox := MDNPreBox;
       end
       else
-         // For annotations to items inside headings, insert the annotation box
-         // right after the end of element being annotated. (Inserting the
-         // annotation after the heading faciliates aligning correctly.)
-         if (Element.HasProperties(propHeading)) then
-         begin
-            if ((Element.NextSibling is TElement)
-                  and ((Element.NextSibling as TElement)
-                     .GetAttribute('class').AsString = 'mdn')) then
-               // If there's already an MDN box at the point where we want this,
-               // then just re-use it (instead of creating another one).
-               MDNBox := Element.NextSibling as TElement
-            else
-               (Element.ParentNode as TElement)
-                  .InsertBefore(MDNBox, Element.NextSibling);
-         end
-      else
-         // In this case, the elements being annotated have parents that are dt
-         // or td elements, or the elements themselves are th elements. So in
-         // order to get the annotations aligned correctly, the annotations are
-         // appended to the element being annotated.
-         if (((Element.ParentNode as TElement).LastChild is TElement)
-               and (((Element.ParentNode as TElement).LastChild as TElement)
+      begin
+         // Otherwise insert the annotation after the element being annotated.
+         if ((Element.NextSibling is TElement)
+               and ((Element.NextSibling as TElement)
                   .GetAttribute('class').AsString = 'mdn')) then
             // If there's already an MDN box at the point where we want this,
             // then just re-use it (instead of creating another one).
-            MDNBox := (Element.ParentNode as TElement).LastChild as TElement
+            MDNBox := Element.NextSibling as TElement
          else
-            Element.AppendChild(MDNBox);
+            (Element.ParentNode as TElement)
+               .InsertBefore(MDNBox, Element.NextSibling);
+      end;
       AddMDNBox(MDNBox, ID, Document);
    end;
 
@@ -1393,6 +1377,7 @@ var
                + '}'
                + ' .mdn details {'
                + '  display: inline;'
+               + '  margin-top: 1px;'
                + '}'
                + ' .mdn summary a {'
                + '  margin-left: -4px;'
